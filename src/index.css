@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: oklch(0.13 0 0);
+  --color-card: oklch(0.17 0 0);
+  --color-border: oklch(0.25 0 0);
+}
+
+html, body, #root {
+  height: 100%;
+}
