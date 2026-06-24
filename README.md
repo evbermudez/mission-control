@@ -9,7 +9,7 @@ A tiny localhost dashboard for solo dev work on Archimedes. Surfaces:
 
 No daemon, no execution from the browser. Just read-only signals plus clipboard helpers.
 
-<img width="1642" height="925" alt="image" src="https://github.com/user-attachments/assets/a9d808f1-9bce-4265-9358-13dd07829add" />
+<img width="3456" height="2190" alt="image" src="https://github.com/user-attachments/assets/350fc4e3-4d6a-4cd8-9ecb-0d16564185c2" />
 
 ## Setup
 
