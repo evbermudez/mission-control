@@ -4,6 +4,7 @@ import BranchesCard from './components/BranchesCard';
 import PrsCard from './components/PrsCard';
 import CodexJobsCard from './components/CodexJobsCard';
 import QuickActionsCard from './components/QuickActionsCard';
+import ReviewLoopCard from './components/ReviewLoopCard';
 
 export default function App() {
   const health = useQuery({ queryKey: ['health'], queryFn: api.health });
@@ -32,6 +33,7 @@ export default function App() {
         </div>
         <div className="flex flex-col gap-4">
           <QuickActionsCard currentBranch={health.data?.branch ?? ''} />
+          <ReviewLoopCard />
           <CodexJobsCard />
         </div>
       </main>

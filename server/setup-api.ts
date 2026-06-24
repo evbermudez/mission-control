@@ -1,5 +1,6 @@
 import type { Connect } from 'vite';
 import { execFile } from 'node:child_process';
+import type { IncomingMessage } from 'node:http';
 import { promisify } from 'node:util';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,6 +13,8 @@ type Env = Record<string, string>;
 export function setupApi(middlewares: Connect.Server, env: Env) {
   const cwd = env.MC_REPO_PATH;
   const codexCompanion = env.MC_CODEX_COMPANION || resolveCodexCompanion();
+  const promptRunsEnabled = env.MC_ENABLE_PROMPT_RUNS === '1';
+  const reviewBase = env.MC_REVIEW_BASE || 'origin/staging';
 
   middlewares.use('/api/health', json(async () => ({
     repo: cwd,
@@ -24,6 +27,14 @@ export function setupApi(middlewares: Connect.Server, env: Env) {
   middlewares.use('/api/prs', json(() => listMyPrs(cwd)));
 
   middlewares.use('/api/codex-jobs', json(() => listCodexJobs(codexCompanion, cwd)));
+
+  middlewares.use('/api/prompt-actions', json(() => listPromptActions(promptRunsEnabled, reviewBase)));
+
+  middlewares.use('/api/prompt-runs', json(async (req) => {
+    if (req.method !== 'POST') throw new HttpError(405, 'POST required');
+    const body = await readJsonBody<PromptRunRequest>(req);
+    return runPromptAction(codexCompanion, cwd, promptRunsEnabled, reviewBase, body.actionId);
+  }));
 }
 
 // ── Endpoints ──────────────────────────────────────────────────────────────
@@ -283,6 +294,131 @@ async function listCodexJobs(companion: string | null, cwd: string): Promise<Cod
   }
 }
 
+interface PromptAction {
+  id: 'codex-claudemd-review' | 'codex-fix-loop';
+  title: string;
+  command: string;
+  description: string;
+  prompt: string;
+  runnable: boolean;
+}
+
+interface PromptActionsResponse {
+  canRun: boolean;
+  reviewBase: string;
+  actions: PromptAction[];
+}
+
+interface PromptRunRequest {
+  actionId: PromptAction['id'];
+}
+
+interface PromptRunResponse {
+  ok: boolean;
+  stdout: string;
+}
+
+function listPromptActions(canRun: boolean, reviewBase: string): PromptActionsResponse {
+  return {
+    canRun,
+    reviewBase,
+    actions: [
+      {
+        id: 'codex-claudemd-review',
+        title: 'Codex AGENTS.md review',
+        command: `/codex:claudemd-review --background --base ${reviewBase}`,
+        description: `Start an independent background review of the current branch against ${reviewBase}.`,
+        prompt: `/codex:claudemd-review --background --base ${reviewBase}`,
+        runnable: canRun,
+      },
+      {
+        id: 'codex-fix-loop',
+        title: 'Fix and repeat review loop',
+        command: 'codex task --background --write',
+        description: 'Ask Codex to fix hard violations, handle small nits, verify, commit, push, then report the next review prompt.',
+        prompt: buildFixLoopPrompt(reviewBase),
+        runnable: canRun,
+      },
+    ],
+  };
+}
+
+async function runPromptAction(
+  companion: string | null,
+  cwd: string,
+  canRun: boolean,
+  reviewBase: string,
+  actionId: PromptAction['id'],
+): Promise<PromptRunResponse> {
+  if (!canRun) {
+    throw new HttpError(403, 'Prompt runs are disabled. Set MC_ENABLE_PROMPT_RUNS=1 to enable.');
+  }
+  if (!companion || !existsSync(companion)) {
+    throw new HttpError(503, 'Codex companion not found');
+  }
+
+  if (actionId === 'codex-claudemd-review') {
+    const { stdout } = await exec(
+      'node',
+      [companion, 'adversarial-review', '--background', '--base', reviewBase, '--scope', 'branch', AGENTS_REVIEW_FOCUS],
+      { cwd },
+    );
+    return { ok: true, stdout: stdout.trim() };
+  }
+
+  if (actionId === 'codex-fix-loop') {
+    const { stdout } = await exec(
+      'node',
+      [companion, 'task', '--background', '--write', '--effort', 'high', buildFixLoopPrompt(reviewBase)],
+      { cwd },
+    );
+    return { ok: true, stdout: stdout.trim() };
+  }
+
+  throw new HttpError(400, `Unknown action: ${actionId}`);
+}
+
+const AGENTS_REVIEW_FOCUS = `Review this branch through the lens of AGENTS.md at the repo root. That file is the authority. Every finding must map to a specific rule in it. Do not invent rules; if something feels wrong but is not in AGENTS.md, flag it as a nit, not a violation.
+
+Return a Markdown review with:
+- Compliance matrix
+- Hard violations, with AGENTS.md citation and file:line
+- Soft violations, with AGENTS.md citation and file:line when concrete
+- Nits
+- Strengths
+- Verdict
+
+Pay special attention to tenant architecture, module boundaries, Octane safety, frontend auth-gated queries, route naming, response shapes, tests, and generated-artifact churn.`;
+
+function buildFixLoopPrompt(reviewBase: string): string {
+  return `Use the Archimedes Codex Builder / Claude Reviewer Loop on the current branch.
+
+Scope:
+- Work only on the current branch and current ticket/PR.
+- Compare against ${reviewBase} unless git state shows a more specific immediate base.
+- Do not rebase, force-push, split commits, or remove commits without asking.
+- Do not touch unrelated files or generated churn unless it is required by the fix.
+
+Loop:
+1. Inspect git status, current branch, open PR metadata if available, and recent Codex/Claude review findings if present.
+2. Run an AGENTS.md review against ${reviewBase} using the claudemd-review framework.
+3. Fix every hard violation that is in scope.
+4. Fix soft violations and nits only when the change is small, low-risk, and in scope.
+5. Convert remaining intentional soft violations into PR-description notes.
+6. Run the smallest relevant tests/build.
+7. Stage only intended files.
+8. Generate a terse Conventional Commit message using the caveman-commit style, then commit and push the branch.
+9. Start or provide the exact next /codex:claudemd-review --background --base ${reviewBase} command for a repeat review.
+10. When the repeat review has no hard violations and no remaining nits, run/use the Archimedes pr-summary-format skill to produce or update the PR body.
+
+Report:
+- Fixed
+- Left as PR note
+- Verification
+- Commit/push status
+- Next review command, or PR summary status when the review loop is clean`;
+}
+
 function resolveCodexCompanion(): string | null {
   const base = join(homedir(), '.claude', 'plugins', 'cache', 'openai-codex', 'codex');
   if (!existsSync(base)) return null;
@@ -294,16 +430,31 @@ function resolveCodexCompanion(): string | null {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function json<T>(handler: () => Promise<T>): Connect.NextHandleFunction {
-  return async (_req, res) => {
+class HttpError extends Error {
+  constructor(public statusCode: number, message: string) {
+    super(message);
+  }
+}
+
+function json<T>(handler: (req: IncomingMessage) => T | Promise<T>): Connect.NextHandleFunction {
+  return async (req, res) => {
     try {
-      const payload = await handler();
+      const payload = await handler(req);
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify(payload));
     } catch (err) {
-      res.statusCode = 500;
+      res.statusCode = err instanceof HttpError ? err.statusCode : 500;
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ error: (err as Error).message }));
     }
   };
+}
+
+async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  if (chunks.length === 0) return {} as T;
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
 }

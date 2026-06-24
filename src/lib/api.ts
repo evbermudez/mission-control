@@ -52,9 +52,42 @@ export interface Health {
   branch: string;
 }
 
+export interface PromptAction {
+  id: 'codex-claudemd-review' | 'codex-fix-loop';
+  title: string;
+  command: string;
+  description: string;
+  prompt: string;
+  runnable: boolean;
+}
+
+export interface PromptActionsResponse {
+  canRun: boolean;
+  reviewBase: string;
+  actions: PromptAction[];
+}
+
+export interface PromptRunResponse {
+  ok: boolean;
+  stdout: string;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload.error || `${path} → ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -63,4 +96,6 @@ export const api = {
   branches: () => get<BranchRow[]>('/api/branches'),
   prs: () => get<PrRow[]>('/api/prs'),
   codexJobs: () => get<CodexJobsResponse>('/api/codex-jobs'),
+  promptActions: () => get<PromptActionsResponse>('/api/prompt-actions'),
+  runPromptAction: (actionId: PromptAction['id']) => post<PromptRunResponse>('/api/prompt-runs', { actionId }),
 };

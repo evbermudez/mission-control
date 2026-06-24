@@ -6,8 +6,9 @@ A tiny localhost dashboard for solo dev work on Archimedes. Surfaces:
 - **My open PRs** — via `gh pr list --author @me`, with CI status.
 - **Codex jobs** — running and recent jobs from the Codex companion.
 - **Quick actions** — click to copy `/claudemd-review`, `/codex:claudemd-review`, etc. Paste into Claude Code yourself.
+- **Review loop** — copy the AGENTS.md review/fix-loop prompts, or opt in to launching whitelisted Codex companion jobs.
 
-No daemon, no execution from the browser. Just read-only signals plus clipboard helpers.
+By default there is no execution from the browser. Prompt-run buttons are disabled unless `MC_ENABLE_PROMPT_RUNS=1` is set.
 
 <img width="3456" height="2190" alt="image" src="https://github.com/user-attachments/assets/350fc4e3-4d6a-4cd8-9ecb-0d16564185c2" />
 
@@ -34,6 +35,8 @@ Open http://localhost:5173.
 |---|---|---|
 | `MC_REPO_PATH` | yes | — |
 | `MC_CODEX_COMPANION` | no | auto-detects latest version in `~/.claude/plugins/cache/openai-codex/codex/` |
+| `MC_ENABLE_PROMPT_RUNS` | no | unset; copy-safe mode |
+| `MC_REVIEW_BASE` | no | `origin/staging` |
 
 ## Architecture
 
@@ -56,9 +59,22 @@ mission-control/
 └── vite.config.ts
 ```
 
+## Review Automation
+
+Mission Control can now support the Codex + Claude review loop without removing the current branch, PR, or job views:
+
+1. Keep using **My open PRs** and **Branches** for visibility.
+2. Use **Review loop** to copy `/codex:claudemd-review --background --base origin/staging`.
+3. Set `MC_ENABLE_PROMPT_RUNS=1` if you want the **run** buttons to launch whitelisted Codex companion jobs directly.
+4. Use the fix-loop action after a review produces hard violations, soft violations, or nits. It asks Codex to fix in scope, verify, stage intended files, generate a caveman-style commit, commit, push, and provide the next review command.
+5. Repeat until the review has no hard violations, no remaining nits, and remaining soft violations are documented PR notes.
+6. Once the loop is clean, run the Archimedes `pr-summary-format` skill to produce or update the PR body.
+
+The server does not accept arbitrary shell commands from the browser. It only dispatches predefined Codex companion actions.
+
 ## What's intentionally not here
 
 - Auth (localhost-only, single user).
 - Database (every refresh re-shells; no state).
-- "Execute" buttons that run AI reviews (would need a Claude Code daemon; keeps conversation context broken). Clipboard-and-paste is the safe pattern.
+- Arbitrary shell execution from the browser.
 - Deploy state / tenant health (deferred until v1 proves useful).
