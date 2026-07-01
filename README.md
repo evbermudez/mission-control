@@ -3,7 +3,7 @@
 A tiny localhost dashboard for solo dev work on Archimedes. Surfaces:
 
 - **Branches** — local branches with ahead/behind counts vs `origin/staging` and `origin/main`.
-- **My open PRs** — via `gh pr list --author @me`, with CI status.
+- **My open PRs** — open PRs authored by you, with CI status and merge target branch.
 - **Codex jobs** — running and recent jobs from the Codex companion.
 - **Quick actions** — click to copy `/claudemd-review`, `/codex:claudemd-review`, etc. Paste into Claude Code yourself.
 - **Review loop** — copy the AGENTS.md review/fix-loop prompts, or opt in to launching whitelisted Codex companion jobs.

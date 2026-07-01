@@ -7,7 +7,7 @@ function hasMergeConflict(mergeable: string): boolean {
 }
 
 export default function PrsCard() {
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const { data, error, isError, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['prs'],
     queryFn: api.prs,
     refetchInterval: 30_000,
@@ -28,8 +28,10 @@ export default function PrsCard() {
 
       {isLoading ? (
         <p className="text-xs text-neutral-500">loading PRs…</p>
+      ) : isError ? (
+        <p className="text-xs text-red-300">{error instanceof Error ? error.message : 'could not load PRs'}</p>
       ) : !data || data.length === 0 ? (
-        <p className="text-xs text-neutral-500">no open PRs (or `gh` not authenticated)</p>
+        <p className="text-xs text-neutral-500">no open PRs</p>
       ) : (
         <ul className="space-y-2">
           {data.map((p) => {
@@ -64,7 +66,14 @@ export default function PrsCard() {
                     </span>
                   )}
                 </a>
-                <span className={`font-mono shrink-0 ${isConflicting ? 'text-red-300' : 'text-neutral-500'}`}>{p.branch}</span>
+                <span
+                  className={`font-mono shrink-0 max-w-72 truncate ${
+                    isConflicting ? 'text-red-300' : 'text-neutral-500'
+                  }`}
+                  title={`${p.branch} merges into ${p.baseBranch}`}
+                >
+                  {p.branch} -&gt; <span className={isConflicting ? 'text-red-200' : 'text-neutral-300'}>{p.baseBranch}</span>
+                </span>
                 <span className={isConflicting ? 'text-red-400/80 shrink-0' : 'text-neutral-600 shrink-0'}>{timeSince(p.updatedAt)}</span>
               </li>
             );

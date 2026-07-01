@@ -113,23 +113,14 @@ async function listBranches(cwd: string): Promise<BranchRow[]> {
 
 async function prsByBranchMap(cwd: string): Promise<Map<string, PrSummary>> {
   try {
-    const { stdout } = await exec(
-      'gh',
-      [
-        'pr',
-        'list',
-        '--author',
-        '@me',
-        '--state',
-        'all',
-        '--limit',
-        '100',
-        '--json',
-        'number,headRefName,url,state',
-      ],
-      { cwd },
-    );
-    const prs = JSON.parse(stdout) as Array<{ number: number; headRefName: string; url: string; state: PrSummary['state'] }>;
+    const repo = await requiredGitHubRepo(cwd);
+    const prs = await searchPullRequests<{
+      number: number;
+      headRefName: string;
+      url: string;
+      state: PrSummary['state'];
+    }>(cwd, repo, 'is:pr author:@me', 100);
+
     const map = new Map<string, PrSummary>();
     for (const p of prs) {
       const existing = map.get(p.headRefName);
@@ -174,6 +165,7 @@ interface PrRow {
   number: number;
   title: string;
   branch: string;
+  baseBranch: string;
   state: string;
   isDraft: boolean;
   mergeable: string;
@@ -183,54 +175,98 @@ interface PrRow {
 }
 
 async function listMyPrs(cwd: string): Promise<PrRow[]> {
-  try {
-    const { stdout } = await exec(
-      'gh',
-      [
-        'pr',
-        'list',
-        '--author',
-        '@me',
-        '--state',
-        'open',
-        '--json',
-        'number,title,headRefName,state,isDraft,mergeable,url,updatedAt,statusCheckRollup',
-        '--limit',
-        '30',
-      ],
-      { cwd },
-    );
-    const raw = JSON.parse(stdout) as Array<{
-      number: number;
-      title: string;
-      headRefName: string;
-      state: string;
-      isDraft: boolean;
-      mergeable: string;
-      url: string;
-      updatedAt: string;
-      statusCheckRollup: Array<{ conclusion?: string; state?: string }>;
-    }>;
-    return raw.map((p) => ({
-      number: p.number,
-      title: p.title,
-      branch: p.headRefName,
-      state: p.state,
-      isDraft: p.isDraft,
-      mergeable: p.mergeable,
-      url: p.url,
-      updatedAt: p.updatedAt,
-      statusCheckRollup: rollupStatus(p.statusCheckRollup),
-    }));
-  } catch (err) {
-    console.error('[mission-control] gh pr list failed:', (err as Error).message);
-    return [];
-  }
+  const repo = await requiredGitHubRepo(cwd);
+  const raw = await searchPullRequests<{
+    number: number;
+    title: string;
+    headRefName: string;
+    baseRefName: string;
+    state: string;
+    isDraft: boolean;
+    mergeable: string;
+    url: string;
+    updatedAt: string;
+    statusCheckRollup: {
+      contexts?: {
+        nodes?: Array<{ conclusion?: string | null; status?: string | null; state?: string | null } | null>;
+      } | null;
+    } | null;
+  }>(cwd, repo, 'is:pr is:open author:@me', 30);
+
+  return raw.map((p) => ({
+    number: p.number,
+    title: p.title,
+    branch: p.headRefName,
+    baseBranch: p.baseRefName,
+    state: p.state,
+    isDraft: p.isDraft,
+    mergeable: p.mergeable,
+    url: p.url,
+    updatedAt: p.updatedAt,
+    statusCheckRollup: rollupStatus(p.statusCheckRollup?.contexts?.nodes ?? []),
+  }));
 }
 
-function rollupStatus(checks: Array<{ conclusion?: string; state?: string }>): 'PASS' | 'PENDING' | 'FAIL' | 'NONE' {
+const PR_SEARCH_GRAPHQL = `query($q: String!, $limit: Int!) {
+  search(type: ISSUE, query: $q, first: $limit) {
+    nodes {
+      ... on PullRequest {
+        number
+        title
+        headRefName
+        baseRefName
+        state
+        isDraft
+        mergeable
+        url
+        updatedAt
+        statusCheckRollup {
+          contexts(first: 50) {
+            nodes {
+              ... on CheckRun {
+                conclusion
+                status
+              }
+              ... on StatusContext {
+                state
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+async function requiredGitHubRepo(cwd: string): Promise<string> {
+  const repo = await parseGitHubRepo(cwd);
+  if (!repo) {
+    throw new HttpError(500, 'Could not resolve GitHub repo from origin remote');
+  }
+  return repo;
+}
+
+async function searchPullRequests<T>(cwd: string, repo: string, qualifiers: string, limit: number): Promise<T[]> {
+  const { stdout } = await exec(
+    'gh',
+    ['api', 'graphql', '-f', `query=${PR_SEARCH_GRAPHQL}`, '-F', `q=repo:${repo} ${qualifiers}`, '-F', `limit=${limit}`],
+    { cwd },
+  );
+
+  const payload = JSON.parse(stdout) as {
+    data?: {
+      search?: {
+        nodes?: Array<T | null>;
+      };
+    };
+  };
+
+  return (payload.data?.search?.nodes ?? []).filter((node): node is T => Boolean(node));
+}
+
+function rollupStatus(checks: Array<{ conclusion?: string | null; status?: string | null; state?: string | null } | null>): 'PASS' | 'PENDING' | 'FAIL' | 'NONE' {
   if (!checks || checks.length === 0) return 'NONE';
-  const states = checks.map((c) => (c.conclusion || c.state || '').toUpperCase());
+  const states = checks.map((c) => (c?.conclusion || c?.state || c?.status || '').toUpperCase());
   if (states.some((s) => s === 'FAILURE' || s === 'TIMED_OUT' || s === 'CANCELLED' || s === 'ACTION_REQUIRED')) return 'FAIL';
   if (states.some((s) => s === 'PENDING' || s === 'IN_PROGRESS' || s === 'QUEUED' || s === '')) return 'PENDING';
   if (states.every((s) => s === 'SUCCESS' || s === 'NEUTRAL' || s === 'SKIPPED')) return 'PASS';

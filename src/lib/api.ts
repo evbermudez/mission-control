@@ -20,6 +20,7 @@ export interface PrRow {
   number: number;
   title: string;
   branch: string;
+  baseBranch: string;
   state: string;
   isDraft: boolean;
   mergeable: string;
