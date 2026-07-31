@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { statusEmoji, timeSince } from '../lib/format';
@@ -7,34 +8,53 @@ function hasMergeConflict(mergeable: string): boolean {
 }
 
 export default function PrsCard() {
+  const [showDrafts, setShowDrafts] = useState(false);
   const { data, error, isError, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['prs'],
     queryFn: api.prs,
     refetchInterval: 30_000,
   });
 
+  const draftCount = useMemo(() => (data ?? []).filter((p) => p.isDraft).length, [data]);
+  const visiblePrs = useMemo(
+    () => (showDrafts ? (data ?? []) : (data ?? []).filter((p) => !p.isDraft)),
+    [data, showDrafts],
+  );
+
   return (
     <section className="bg-neutral-900 border border-neutral-800 rounded-lg p-4">
       <header className="flex items-center justify-between mb-3">
         <h2 className="text-sm font-semibold text-neutral-300">My open PRs</h2>
-        <button
-          onClick={() => refetch()}
-          className="text-xs text-neutral-500 hover:text-neutral-200 transition"
-          disabled={isFetching}
-        >
-          {isFetching ? 'refreshing…' : 'refresh'}
-        </button>
+        <div className="flex items-center gap-3">
+          {draftCount > 0 && (
+            <button
+              onClick={() => setShowDrafts((v) => !v)}
+              className="text-xs text-neutral-500 hover:text-neutral-200 transition"
+            >
+              {showDrafts ? `hide drafts (${draftCount})` : `show drafts (${draftCount})`}
+            </button>
+          )}
+          <button
+            onClick={() => refetch()}
+            className="text-xs text-neutral-500 hover:text-neutral-200 transition"
+            disabled={isFetching}
+          >
+            {isFetching ? 'refreshing…' : 'refresh'}
+          </button>
+        </div>
       </header>
 
       {isLoading ? (
         <p className="text-xs text-neutral-500">loading PRs…</p>
       ) : isError ? (
         <p className="text-xs text-red-300">{error instanceof Error ? error.message : 'could not load PRs'}</p>
-      ) : !data || data.length === 0 ? (
-        <p className="text-xs text-neutral-500">no open PRs</p>
+      ) : visiblePrs.length === 0 ? (
+        <p className="text-xs text-neutral-500">
+          {draftCount > 0 ? `no open PRs (${draftCount} draft${draftCount === 1 ? '' : 's'} hidden)` : 'no open PRs'}
+        </p>
       ) : (
         <ul className="space-y-2">
-          {data.map((p) => {
+          {visiblePrs.map((p) => {
             const isConflicting = hasMergeConflict(p.mergeable);
 
             return (
@@ -63,6 +83,11 @@ export default function PrsCard() {
                   {isConflicting && (
                     <span className="ml-2 text-[10px] uppercase tracking-wider text-red-200 bg-red-900/60 border border-red-700/60 px-1.5 py-0.5 rounded">
                       conflict
+                    </span>
+                  )}
+                  {p.reviewDecision === 'CHANGES_REQUESTED' && (
+                    <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-200 bg-amber-900/50 border border-amber-700/60 px-1.5 py-0.5 rounded">
+                      changes requested
                     </span>
                   )}
                 </a>

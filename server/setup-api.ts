@@ -169,10 +169,13 @@ interface PrRow {
   state: string;
   isDraft: boolean;
   mergeable: string;
+  reviewDecision: ReviewDecision;
   url: string;
   updatedAt: string;
   statusCheckRollup: 'PASS' | 'PENDING' | 'FAIL' | 'NONE';
 }
+
+type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
 
 async function listMyPrs(cwd: string): Promise<PrRow[]> {
   const repo = await requiredGitHubRepo(cwd);
@@ -184,6 +187,7 @@ async function listMyPrs(cwd: string): Promise<PrRow[]> {
     state: string;
     isDraft: boolean;
     mergeable: string;
+    reviewDecision: ReviewDecision;
     url: string;
     updatedAt: string;
     statusCheckRollup: {
@@ -201,6 +205,7 @@ async function listMyPrs(cwd: string): Promise<PrRow[]> {
     state: p.state,
     isDraft: p.isDraft,
     mergeable: p.mergeable,
+    reviewDecision: p.reviewDecision ?? null,
     url: p.url,
     updatedAt: p.updatedAt,
     statusCheckRollup: rollupStatus(p.statusCheckRollup?.contexts?.nodes ?? []),
@@ -218,6 +223,7 @@ const PR_SEARCH_GRAPHQL = `query($q: String!, $limit: Int!) {
         state
         isDraft
         mergeable
+        reviewDecision
         url
         updatedAt
         statusCheckRollup {

@@ -16,6 +16,8 @@ export interface BranchRow {
   branchUrl: string | null;
 }
 
+export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
+
 export interface PrRow {
   number: number;
   title: string;
@@ -24,6 +26,7 @@ export interface PrRow {
   state: string;
   isDraft: boolean;
   mergeable: string;
+  reviewDecision: ReviewDecision;
   url: string;
   updatedAt: string;
   statusCheckRollup: 'PASS' | 'PENDING' | 'FAIL' | 'NONE';
