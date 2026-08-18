@@ -2,7 +2,7 @@ import type { Connect } from 'vite';
 import { execFile } from 'node:child_process';
 import type { IncomingMessage } from 'node:http';
 import { promisify } from 'node:util';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -26,6 +26,8 @@ export function setupApi(middlewares: Connect.Server, env: Env) {
 
   middlewares.use('/api/prs', json(() => listMyPrs(cwd)));
 
+  middlewares.use('/api/skills', json(() => listCustomSkills(cwd)));
+
   middlewares.use('/api/codex-jobs', json(() => listCodexJobs(codexCompanion, cwd)));
 
   middlewares.use('/api/prompt-actions', json(() => listPromptActions(promptRunsEnabled, reviewBase)));
@@ -38,6 +40,66 @@ export function setupApi(middlewares: Connect.Server, env: Env) {
 }
 
 // ── Endpoints ──────────────────────────────────────────────────────────────
+
+interface SkillRow {
+  name: string;
+  description: string;
+  source: 'personal' | 'project';
+}
+
+function listCustomSkills(cwd: string): SkillRow[] {
+  const locations: Array<{ root: string; source: SkillRow['source'] }> = [
+    { root: join(homedir(), '.codex', 'skills'), source: 'personal' },
+    { root: join(cwd, '.agents', 'skills'), source: 'project' },
+  ];
+  const skills = new Map<string, SkillRow>();
+
+  for (const { root, source } of locations) {
+    if (!existsSync(root)) continue;
+
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const skillFile = join(root, entry.name, 'SKILL.md');
+      if (!existsSync(skillFile)) continue;
+
+      const metadata = readSkillMetadata(skillFile);
+      const name = metadata.name || entry.name;
+      skills.set(name, { name, description: metadata.description, source });
+    }
+  }
+
+  return [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function readSkillMetadata(skillFile: string): { name: string; description: string } {
+  const content = readFileSync(skillFile, 'utf8');
+  const frontmatter = content.match(/^---\s*\n([\s\S]*?)\n---/)?.[1] ?? '';
+  const lines = frontmatter.split('\n');
+  const name = unquote(lines.find((line) => line.startsWith('name:'))?.slice(5).trim() ?? '');
+  const descriptionIndex = lines.findIndex((line) => line.startsWith('description:'));
+
+  if (descriptionIndex === -1) return { name, description: '' };
+
+  const initial = lines[descriptionIndex].slice('description:'.length).trim();
+  if (initial !== '>' && initial !== '|') {
+    return { name, description: unquote(initial) };
+  }
+
+  const descriptionLines: string[] = [];
+  for (const line of lines.slice(descriptionIndex + 1)) {
+    if (!/^\s+/.test(line)) break;
+    descriptionLines.push(line.trim());
+  }
+  const description = descriptionLines.join(' ');
+  return { name, description };
+}
+
+function unquote(value: string): string {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
 
 async function currentBranch(cwd: string): Promise<string> {
   try {
@@ -169,6 +231,8 @@ interface PrRow {
   state: string;
   isDraft: boolean;
   mergeable: string;
+  mergeStateStatus: string;
+  rebaseable: boolean | null;
   reviewDecision: ReviewDecision;
   url: string;
   updatedAt: string;
@@ -187,6 +251,7 @@ async function listMyPrs(cwd: string): Promise<PrRow[]> {
     state: string;
     isDraft: boolean;
     mergeable: string;
+    mergeStateStatus: string;
     reviewDecision: ReviewDecision;
     url: string;
     updatedAt: string;
@@ -197,7 +262,9 @@ async function listMyPrs(cwd: string): Promise<PrRow[]> {
     } | null;
   }>(cwd, repo, 'is:pr is:open author:@me', 30);
 
-  return raw.map((p) => ({
+  const rebaseability = await Promise.all(raw.map((p) => getPrRebaseability(cwd, repo, p.number)));
+
+  return raw.map((p, index) => ({
     number: p.number,
     title: p.title,
     branch: p.headRefName,
@@ -205,11 +272,23 @@ async function listMyPrs(cwd: string): Promise<PrRow[]> {
     state: p.state,
     isDraft: p.isDraft,
     mergeable: p.mergeable,
+    mergeStateStatus: p.mergeStateStatus,
+    rebaseable: rebaseability[index],
     reviewDecision: p.reviewDecision ?? null,
     url: p.url,
     updatedAt: p.updatedAt,
     statusCheckRollup: rollupStatus(p.statusCheckRollup?.contexts?.nodes ?? []),
   }));
+}
+
+async function getPrRebaseability(cwd: string, repo: string, number: number): Promise<boolean | null> {
+  try {
+    const { stdout } = await exec('gh', ['api', `repos/${repo}/pulls/${number}`, '--jq', '.rebaseable'], { cwd });
+    const value = stdout.trim();
+    return value === 'true' ? true : value === 'false' ? false : null;
+  } catch {
+    return null;
+  }
 }
 
 const PR_SEARCH_GRAPHQL = `query($q: String!, $limit: Int!) {
@@ -223,6 +302,7 @@ const PR_SEARCH_GRAPHQL = `query($q: String!, $limit: Int!) {
         state
         isDraft
         mergeable
+        mergeStateStatus
         reviewDecision
         url
         updatedAt

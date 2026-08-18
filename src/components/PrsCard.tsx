@@ -3,8 +3,16 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { statusEmoji, timeSince } from '../lib/format';
 
-function hasMergeConflict(mergeable: string): boolean {
-  return mergeable.toUpperCase() === 'CONFLICTING';
+type ConflictKind = 'merge' | 'rebase' | 'merge + rebase' | null;
+
+function conflictKind(mergeable: string, mergeStateStatus: string, rebaseable: boolean | null): ConflictKind {
+  const hasMergeConflict = mergeable.toUpperCase() === 'CONFLICTING' || mergeStateStatus.toUpperCase() === 'DIRTY';
+  const hasRebaseConflict = rebaseable === false;
+
+  if (hasMergeConflict && hasRebaseConflict) return 'merge + rebase';
+  if (hasMergeConflict) return 'merge';
+  if (hasRebaseConflict) return 'rebase';
+  return null;
 }
 
 export default function PrsCard() {
@@ -55,7 +63,8 @@ export default function PrsCard() {
       ) : (
         <ul className="space-y-2">
           {visiblePrs.map((p) => {
-            const isConflicting = hasMergeConflict(p.mergeable);
+            const conflict = conflictKind(p.mergeable, p.mergeStateStatus, p.rebaseable);
+            const isConflicting = conflict !== null;
 
             return (
               <li
@@ -81,8 +90,11 @@ export default function PrsCard() {
                     </span>
                   )}
                   {isConflicting && (
-                    <span className="ml-2 text-[10px] uppercase tracking-wider text-red-200 bg-red-900/60 border border-red-700/60 px-1.5 py-0.5 rounded">
-                      conflict
+                    <span
+                      className="ml-2 text-[10px] uppercase tracking-wider text-red-200 bg-red-900/60 border border-red-700/60 px-1.5 py-0.5 rounded"
+                      title={`${conflict} conflict`}
+                    >
+                      {conflict} conflict
                     </span>
                   )}
                   {p.reviewDecision === 'CHANGES_REQUESTED' && (

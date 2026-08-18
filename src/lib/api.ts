@@ -26,6 +26,8 @@ export interface PrRow {
   state: string;
   isDraft: boolean;
   mergeable: string;
+  mergeStateStatus: string;
+  rebaseable: boolean | null;
   reviewDecision: ReviewDecision;
   url: string;
   updatedAt: string;
@@ -54,6 +56,12 @@ export interface Health {
   repo: string;
   codexCompanion: string | null;
   branch: string;
+}
+
+export interface SkillRow {
+  name: string;
+  description: string;
+  source: 'personal' | 'project';
 }
 
 export interface PromptAction {
@@ -99,6 +107,7 @@ export const api = {
   health: () => get<Health>('/api/health'),
   branches: () => get<BranchRow[]>('/api/branches'),
   prs: () => get<PrRow[]>('/api/prs'),
+  skills: () => get<SkillRow[]>('/api/skills'),
   codexJobs: () => get<CodexJobsResponse>('/api/codex-jobs'),
   promptActions: () => get<PromptActionsResponse>('/api/prompt-actions'),
   runPromptAction: (actionId: PromptAction['id']) => post<PromptRunResponse>('/api/prompt-runs', { actionId }),
