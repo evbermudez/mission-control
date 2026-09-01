@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { aheadBehindClass, aheadBehindLabel, copy } from '../lib/format';
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 5;
 
 function prStateClass(state: 'OPEN' | 'CLOSED' | 'MERGED'): string {
   if (state === 'OPEN') return 'text-emerald-400';

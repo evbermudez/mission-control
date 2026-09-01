@@ -2,7 +2,7 @@ import type { Connect } from 'vite';
 import { execFile } from 'node:child_process';
 import type { IncomingMessage } from 'node:http';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -15,6 +15,8 @@ export function setupApi(middlewares: Connect.Server, env: Env) {
   const codexCompanion = env.MC_CODEX_COMPANION || resolveCodexCompanion();
   const promptRunsEnabled = env.MC_ENABLE_PROMPT_RUNS === '1';
   const reviewBase = env.MC_REVIEW_BASE || 'origin/staging';
+  const archimedesVault = env.MC_ARCHIMEDES_VAULT_PATH
+    || join(homedir(), 'Documents', 'Obsidian Vault', 'Archimedes');
 
   middlewares.use('/api/health', json(async () => ({
     repo: cwd,
@@ -25,6 +27,12 @@ export function setupApi(middlewares: Connect.Server, env: Env) {
   middlewares.use('/api/branches', json(() => listBranches(cwd)));
 
   middlewares.use('/api/prs', json(() => listMyPrs(cwd)));
+
+  middlewares.use('/api/commit-activity', json(() => listCommitActivity(cwd)));
+
+  middlewares.use('/api/merged-pr-activity', json(() => listMergedPrActivity(cwd)));
+
+  middlewares.use('/api/archimedes-vault', json(() => listArchimedesVault(archimedesVault)));
 
   middlewares.use('/api/skills', json(() => listCustomSkills(cwd)));
 
@@ -45,6 +53,361 @@ interface SkillRow {
   name: string;
   description: string;
   source: 'personal' | 'project';
+}
+
+interface VaultScope {
+  title: string;
+  module: string | null;
+  tickets: string;
+  stage: string | null;
+  updatedAt: string;
+  url: string;
+}
+
+interface VaultDelivery {
+  title: string;
+  url: string;
+}
+
+interface VaultShortcut {
+  label: string;
+  description: string;
+  url: string;
+}
+
+interface ArchimedesVaultResponse {
+  available: boolean;
+  lastUpdatedAt: string | null;
+  scopes: VaultScope[];
+  deliveries: VaultDelivery[];
+  shortcuts: VaultShortcut[];
+  error?: string;
+}
+
+const VAULT_SHORTCUTS = [
+  { label: 'Index', description: 'Project knowledge map', path: ['Archimedes index.md'] },
+  { label: 'Architecture', description: 'System design pointers', path: ['architecture', 'architecture pointers.md'] },
+  { label: 'Business rules', description: 'Domain rules and references', path: ['business rules', 'business rules seed.md'] },
+  { label: 'Lessons learned', description: 'Incidents and durable gotchas', path: ['lessons learned', 'lessons learned seed.md'] },
+  { label: 'Debugging', description: 'Symptom-to-fix notes', path: ['debugging notes', 'debugging pointers.md'] },
+] as const;
+
+function listArchimedesVault(vaultRoot: string): ArchimedesVaultResponse {
+  if (!existsSync(vaultRoot)) {
+    return {
+      available: false,
+      lastUpdatedAt: null,
+      scopes: [],
+      deliveries: [],
+      shortcuts: [],
+      error: 'Archimedes vault not found',
+    };
+  }
+
+  try {
+    const ticketRoot = join(vaultRoot, 'tickets');
+    const scopes = existsSync(ticketRoot)
+      ? readdirSync(ticketRoot, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /^\d.*\.md$/i.test(entry.name))
+        .map((entry) => readVaultScope(join(ticketRoot, entry.name), entry.name))
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 3)
+      : [];
+
+    const deliverablesPath = join(vaultRoot, 'deliverables log.md');
+    const deliveries = existsSync(deliverablesPath)
+      ? readVaultDeliveries(deliverablesPath)
+      : [];
+    const shortcuts = VAULT_SHORTCUTS.flatMap((shortcut) => {
+      const path = join(vaultRoot, ...shortcut.path);
+      return existsSync(path)
+        ? [{ label: shortcut.label, description: shortcut.description, url: obsidianUrl(path) }]
+        : [];
+    });
+    const updateTimes = [
+      ...scopes.map((scope) => scope.updatedAt),
+      ...(existsSync(deliverablesPath) ? [statSync(deliverablesPath).mtime.toISOString()] : []),
+    ];
+
+    return {
+      available: true,
+      lastUpdatedAt: updateTimes.sort().at(-1) ?? null,
+      scopes,
+      deliveries,
+      shortcuts,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      lastUpdatedAt: null,
+      scopes: [],
+      deliveries: [],
+      shortcuts: [],
+      error: error instanceof Error ? error.message : 'Could not read Archimedes vault',
+    };
+  }
+}
+
+function readVaultScope(path: string, filename: string): VaultScope {
+  const content = readFileSync(path, 'utf8');
+  const metadata = readSimpleFrontmatter(content);
+  const title = content.match(/^#\s+(.+)$/m)?.[1]?.trim()
+    || filename.replace(/\.md$/i, '');
+
+  return {
+    title,
+    module: metadata.module || null,
+    tickets: metadata.tickets || filename.replace(/\.md$/i, ''),
+    stage: metadata.stage || null,
+    updatedAt: statSync(path).mtime.toISOString(),
+    url: obsidianUrl(path),
+  };
+}
+
+function readVaultDeliveries(path: string): VaultDelivery[] {
+  const content = readFileSync(path, 'utf8');
+  return [...content.matchAll(/^##\s+(.+)$/gm)]
+    .slice(0, 3)
+    .map((match) => ({
+      title: match[1].trim(),
+      url: obsidianUrl(path, match[1].trim()),
+    }));
+}
+
+function readSimpleFrontmatter(content: string): Record<string, string> {
+  const frontmatter = content.match(/^---\s*\n([\s\S]*?)\n---/)?.[1] ?? '';
+  return Object.fromEntries(
+    frontmatter.split('\n').flatMap((line) => {
+      const separator = line.indexOf(':');
+      if (separator === -1) return [];
+      const key = line.slice(0, separator).trim();
+      const value = unquote(line.slice(separator + 1).trim());
+      return key && value ? [[key, value]] : [];
+    }),
+  );
+}
+
+function obsidianUrl(path: string, heading?: string): string {
+  const target = heading ? `${path}#${heading}` : path;
+  return `obsidian://open?path=${encodeURIComponent(target)}`;
+}
+
+interface ActivityWeek {
+  start: string;
+  end: string;
+  total: number;
+}
+
+interface Contributor {
+  key: string;
+  label: string;
+}
+
+interface ContributionWeek extends ActivityWeek {
+  contributions: Record<string, number>;
+}
+
+interface CommitActivityResponse {
+  branch: string;
+  timezone: string;
+  contributors: Contributor[];
+  weeks: ContributionWeek[];
+  firstParentWeeks: ContributionWeek[];
+}
+
+interface MergedPrActivityResponse {
+  baseBranch: string;
+  timezone: string;
+  contributors: Contributor[];
+  weeks: ContributionWeek[];
+}
+
+interface ActivityRange {
+  start: string;
+  today: string;
+  firstFullWeek: string;
+}
+
+async function listCommitActivity(cwd: string): Promise<CommitActivityResponse> {
+  const range = activityRange();
+  const logArguments = [
+    'log',
+    'origin/staging',
+    '--no-merges',
+    `--since=${range.start} 00:00:00 +0800`,
+    `--until=${addDays(range.today, 1)} 00:00:00 +0800`,
+  ];
+  const [allCommits, firstParentCommits] = await Promise.all([
+    exec('git', [...logArguments, '--format=%cI%x09%an%x09%ae'], { cwd, maxBuffer: 10 * 1024 * 1024 }),
+    exec('git', [...logArguments, '--first-parent', '--format=%cI%x09%an%x09%ae'], { cwd, maxBuffer: 10 * 1024 * 1024 }),
+  ]);
+
+  const contributionTotals = new Map<string, { contributor: Contributor; total: number }>();
+  const weeks = createContributionWeeks(range);
+  for (const line of allCommits.stdout.trim().split('\n').filter(Boolean)) {
+    const [committedAt, name, email] = line.split('\t');
+    const week = weeks.get(weekStartFor(new Date(committedAt), range));
+    if (!week) continue;
+    recordContribution(week, gitContributor(name, email), contributionTotals);
+  }
+
+  const firstParentWeeks = createContributionWeeks(range);
+  for (const line of firstParentCommits.stdout.trim().split('\n').filter(Boolean)) {
+    const [committedAt, name, email] = line.split('\t');
+    const week = firstParentWeeks.get(weekStartFor(new Date(committedAt), range));
+    if (week) recordContribution(week, gitContributor(name, email));
+  }
+
+  return {
+    branch: 'origin/staging',
+    timezone: 'Asia/Manila',
+    contributors: contributorList(contributionTotals),
+    weeks: [...weeks.values()],
+    firstParentWeeks: [...firstParentWeeks.values()],
+  };
+}
+
+async function listMergedPrActivity(cwd: string): Promise<MergedPrActivityResponse> {
+  const range = activityRange();
+  const repo = await requiredGitHubRepo(cwd);
+  const { stdout } = await exec(
+    'gh',
+    ['pr', 'list', '--repo', repo, '--state', 'merged', '--base', 'staging', '--search', `merged:>=${range.start}`, '--limit', '1000', '--json', 'mergedAt,author'],
+    { cwd, maxBuffer: 10 * 1024 * 1024 },
+  );
+  const pullRequests = JSON.parse(stdout) as Array<{ mergedAt: string | null; author: { login: string } | null }>;
+  const contributionTotals = new Map<string, { contributor: Contributor; total: number }>();
+  const weeks = createContributionWeeks(range);
+
+  for (const pullRequest of pullRequests) {
+    if (!pullRequest.mergedAt || !pullRequest.author) continue;
+    const week = weeks.get(weekStartFor(new Date(pullRequest.mergedAt), range));
+    if (week) recordContribution(week, githubContributor(pullRequest.author.login), contributionTotals);
+  }
+
+  return {
+    baseBranch: 'staging',
+    timezone: 'Asia/Manila',
+    contributors: contributorList(contributionTotals),
+    weeks: [...weeks.values()],
+  };
+}
+
+function activityRange(): ActivityRange {
+  const today = dateInTimeZone(new Date(), 'Asia/Manila');
+  const currentYear = Number(today.slice(0, 4));
+  const mayThisYear = `${currentYear}-05-01`;
+  const start = today >= mayThisYear ? mayThisYear : `${currentYear - 1}-05-01`;
+  return { start, today, firstFullWeek: nextMonday(start) };
+}
+
+function createActivityWeeks(range: ActivityRange): Map<string, ActivityWeek> {
+  const weeks = new Map<string, ActivityWeek>();
+  for (
+    let weekStart = range.start;
+    weekStart <= range.today;
+    weekStart = weekStart === range.start && range.start !== range.firstFullWeek
+      ? range.firstFullWeek
+      : addDays(weekStart, 7)
+  ) {
+    const naturalEnd = weekStart === range.start && range.start !== range.firstFullWeek
+      ? addDays(range.firstFullWeek, -1)
+      : addDays(weekStart, 6);
+    weeks.set(weekStart, {
+      start: weekStart,
+      end: naturalEnd < range.today ? naturalEnd : range.today,
+      total: 0,
+    });
+  }
+  return weeks;
+}
+
+function createContributionWeeks(range: ActivityRange): Map<string, ContributionWeek> {
+  const weeks = new Map<string, ContributionWeek>();
+  for (const [start, week] of createActivityWeeks(range)) {
+    weeks.set(start, {
+      ...week,
+      contributions: {},
+    });
+  }
+  return weeks;
+}
+
+function weekStartFor(date: Date, range: ActivityRange): string {
+  const committedDate = dateInTimeZone(date, 'Asia/Manila');
+  return committedDate < range.firstFullWeek ? range.start : mondayOf(committedDate);
+}
+
+function recordContribution(
+  week: ContributionWeek,
+  contributor: Contributor,
+  totals?: Map<string, { contributor: Contributor; total: number }>,
+): void {
+  week.total += 1;
+  week.contributions[contributor.key] = (week.contributions[contributor.key] ?? 0) + 1;
+  if (!totals) return;
+
+  const existing = totals.get(contributor.key);
+  totals.set(contributor.key, { contributor, total: (existing?.total ?? 0) + 1 });
+}
+
+function contributorList(totals: Map<string, { contributor: Contributor; total: number }>): Contributor[] {
+  return [...totals.values()]
+    .sort((a, b) => b.total - a.total || a.contributor.label.localeCompare(b.contributor.label))
+    .map(({ contributor }) => contributor);
+}
+
+function gitContributor(name: string, email: string): Contributor {
+  const identity = `${name} ${email}`.toLowerCase();
+  if (identity.includes('ev.bermudez') || identity.includes('eric.bermudez') || identity.includes('eric vincent bermudez')) return { key: 'eric', label: 'Eric' };
+  if (identity.includes('hrishabh') || identity.includes('pandev')) return { key: 'hrishabh', label: 'Hrishabh' };
+  if (identity.includes('giorgio')) return { key: 'giorgio', label: 'Giorgio' };
+  if (identity.includes('giuseppe')) return { key: 'giuseppe', label: 'Giuseppe' };
+  if (identity.includes('gncao523') || identity.includes('achsu5jh')) return { key: 'gncao523', label: 'gncao523' };
+  if (identity.includes('claude') || identity.includes('anthropic')) return { key: 'claude', label: 'Claude' };
+  if (identity.includes('apple')) return { key: 'apple', label: 'Apple' };
+  if (identity.includes('leaptime')) return { key: 'leaptime', label: 'Leaptime' };
+  return { key: contributorKey(name || email), label: name || email };
+}
+
+function githubContributor(login: string): Contributor {
+  const normalized = login.toLowerCase();
+  if (normalized === 'evbermudez') return { key: 'eric', label: 'Eric' };
+  if (normalized === 'pandev-hrishabh') return { key: 'hrishabh', label: 'Hrishabh' };
+  if (normalized === 'giuseppev96') return { key: 'giuseppe', label: 'Giuseppe' };
+  return { key: contributorKey(login), label: login };
+}
+
+function contributorKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'unknown';
+}
+
+function dateInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? '';
+  return `${value('year')}-${value('month')}-${value('day')}`;
+}
+
+function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function mondayOf(date: string): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  const daysSinceMonday = (value.getUTCDay() + 6) % 7;
+  return addDays(date, -daysSinceMonday);
+}
+
+function nextMonday(date: string): string {
+  const monday = mondayOf(date);
+  return monday === date ? date : addDays(monday, 7);
 }
 
 function listCustomSkills(cwd: string): SkillRow[] {

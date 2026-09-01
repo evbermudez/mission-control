@@ -64,6 +64,65 @@ export interface SkillRow {
   source: 'personal' | 'project';
 }
 
+export interface ActivityWeek {
+  start: string;
+  end: string;
+  total: number;
+}
+
+export interface Contributor {
+  key: string;
+  label: string;
+}
+
+export interface ContributionWeek extends ActivityWeek {
+  contributions: Record<string, number>;
+}
+
+export interface CommitActivityResponse {
+  branch: string;
+  timezone: string;
+  contributors: Contributor[];
+  weeks: ContributionWeek[];
+  firstParentWeeks: ContributionWeek[];
+}
+
+export interface MergedPrActivityResponse {
+  baseBranch: string;
+  timezone: string;
+  contributors: Contributor[];
+  weeks: ContributionWeek[];
+}
+
+export interface VaultScope {
+  title: string;
+  module: string | null;
+  tickets: string;
+  stage: string | null;
+  updatedAt: string;
+  url: string;
+}
+
+export interface VaultDelivery {
+  title: string;
+  url: string;
+}
+
+export interface VaultShortcut {
+  label: string;
+  description: string;
+  url: string;
+}
+
+export interface ArchimedesVaultResponse {
+  available: boolean;
+  lastUpdatedAt: string | null;
+  scopes: VaultScope[];
+  deliveries: VaultDelivery[];
+  shortcuts: VaultShortcut[];
+  error?: string;
+}
+
 export interface PromptAction {
   id: 'codex-claudemd-review' | 'codex-fix-loop';
   title: string;
@@ -107,6 +166,9 @@ export const api = {
   health: () => get<Health>('/api/health'),
   branches: () => get<BranchRow[]>('/api/branches'),
   prs: () => get<PrRow[]>('/api/prs'),
+  commitActivity: () => get<CommitActivityResponse>('/api/commit-activity'),
+  mergedPrActivity: () => get<MergedPrActivityResponse>('/api/merged-pr-activity'),
+  archimedesVault: () => get<ArchimedesVaultResponse>('/api/archimedes-vault'),
   skills: () => get<SkillRow[]>('/api/skills'),
   codexJobs: () => get<CodexJobsResponse>('/api/codex-jobs'),
   promptActions: () => get<PromptActionsResponse>('/api/prompt-actions'),

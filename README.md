@@ -7,6 +7,7 @@ A tiny localhost dashboard for solo dev work on Archimedes. Surfaces:
 - **Codex jobs** — running and recent jobs from the Codex companion.
 - **Quick actions** — click to copy `/claudemd-review`, `/codex:claudemd-review`, etc. Paste into Claude Code yourself.
 - **Review loop** — copy the AGENTS.md review/fix-loop prompts, or opt in to launching whitelisted Codex companion jobs.
+- **Archimedes Vault** — recent ticket scopes, delivered batches, and safe project-knowledge shortcuts.
 
 By default there is no execution from the browser. Prompt-run buttons are disabled unless `MC_ENABLE_PROMPT_RUNS=1` is set.
 
@@ -34,6 +35,7 @@ Open http://localhost:5173.
 | Var | Required | Default |
 |---|---|---|
 | `MC_REPO_PATH` | yes | — |
+| `MC_ARCHIMEDES_VAULT_PATH` | no | `~/Documents/Obsidian Vault/Archimedes` |
 | `MC_CODEX_COMPANION` | no | auto-detects latest version in `~/.claude/plugins/cache/openai-codex/codex/` |
 | `MC_ENABLE_PROMPT_RUNS` | no | unset; copy-safe mode |
 | `MC_REVIEW_BASE` | no | `origin/staging` |

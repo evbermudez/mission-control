@@ -2,7 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from './lib/api';
 import BranchesCard from './components/BranchesCard';
 import PrsCard from './components/PrsCard';
+import CommitActivityCard from './components/CommitActivityCard';
 import CustomSkillsCard from './components/CustomSkillsCard';
+import ArchimedesVaultCard from './components/ArchimedesVaultCard';
 
 export default function App() {
   const health = useQuery({ queryKey: ['health'], queryFn: api.health });
@@ -27,9 +29,11 @@ export default function App() {
       <main className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 flex flex-col gap-4">
           <PrsCard />
+          <CommitActivityCard />
           <BranchesCard currentBranch={health.data?.branch ?? ''} />
         </div>
         <div className="flex flex-col gap-4">
+          <ArchimedesVaultCard />
           <CustomSkillsCard />
         </div>
       </main>
